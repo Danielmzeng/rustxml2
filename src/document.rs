@@ -320,6 +320,45 @@ impl XmlDocument {
     pub fn child_elements<'a>(&'a self, id: NodeId, name: Option<&'a str>) -> ChildElements<'a> {
         ChildElements { doc: self, next: self.node(id).first_child, name }
     }
+
+    /// Traverse the subtree rooted at `id`, dispatching to `visitor`.
+    pub fn accept(&self, id: NodeId, visitor: &mut dyn crate::visitor::XmlVisitor) {
+        use crate::node::NodeKind;
+        match &self.node(id).kind {
+            NodeKind::Document => {
+                if visitor.visit_enter_document(self, id) {
+                    self.accept_children(id, visitor);
+                }
+                visitor.visit_exit_document(self, id);
+            }
+            NodeKind::Element(_) => {
+                if visitor.visit_enter_element(self, id) {
+                    self.accept_children(id, visitor);
+                }
+                visitor.visit_exit_element(self, id);
+            }
+            NodeKind::Text(_) => {
+                visitor.visit_text(self, id);
+            }
+            NodeKind::Comment => {
+                visitor.visit_comment(self, id);
+            }
+            NodeKind::Declaration => {
+                visitor.visit_declaration(self, id);
+            }
+            NodeKind::Unknown => {
+                visitor.visit_unknown(self, id);
+            }
+        }
+    }
+
+    fn accept_children(&self, id: NodeId, visitor: &mut dyn crate::visitor::XmlVisitor) {
+        let mut child = self.node(id).first_child;
+        while let Some(c) = child {
+            self.accept(c, visitor);
+            child = self.node(c).next_sibling;
+        }
+    }
 }
 
 impl Default for XmlDocument {
