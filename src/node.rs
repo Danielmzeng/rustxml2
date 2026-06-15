@@ -6,9 +6,14 @@ use crate::attribute::Attribute;
 /// Whitespace handling mode (tinyxml2 `Whitespace`).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Whitespace {
+    /// Keep all text whitespace verbatim.
     #[default]
     Preserve,
+    /// Collapse internal whitespace runs to a single space and trim ends;
+    /// drop whitespace-only text nodes.
     Collapse,
+    /// Strict mode: like [`Preserve`](Whitespace::Preserve), whitespace is kept
+    /// verbatim (matching tinyxml2, which does not collapse in pedantic mode).
     Pedantic,
 }
 

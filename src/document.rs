@@ -41,6 +41,16 @@ impl XmlDocument {
     pub fn set_process_entities(&mut self, on: bool) {
         self.process_entities = on;
     }
+    /// Control whether a leading UTF-8 BOM is written by the printer
+    /// (port of tinyxml2 `XMLDocument::SetBOM`).
+    pub fn set_bom(&mut self, on: bool) {
+        self.write_bom = on;
+    }
+    /// Whether a BOM will be written (set automatically when parsing
+    /// BOM-prefixed input).
+    pub fn has_bom(&self) -> bool {
+        self.write_bom
+    }
 
     // ---- error state ----
     pub fn error(&self) -> Option<XmlError> {
@@ -128,6 +138,21 @@ impl XmlDocument {
                 self.node_mut(parent).first_child = Some(child);
                 self.node_mut(parent).last_child = Some(child);
             }
+        }
+        child
+    }
+
+    /// Insert `child` immediately after the existing child `after` (which must
+    /// already be a child of `parent`).
+    pub fn insert_after_child(&mut self, parent: NodeId, after: NodeId, child: NodeId) -> NodeId {
+        self.node_mut(child).parent = Some(parent);
+        let next = self.node(after).next_sibling;
+        self.node_mut(after).next_sibling = Some(child);
+        self.node_mut(child).prev_sibling = Some(after);
+        self.node_mut(child).next_sibling = next;
+        match next {
+            Some(n) => self.node_mut(n).prev_sibling = Some(child),
+            None => self.node_mut(parent).last_child = Some(child),
         }
         child
     }
@@ -333,6 +358,14 @@ impl XmlDocument {
         }
     }
 
+    /// Iterate over all child nodes of `id` (every kind, not just elements).
+    pub fn children(&self, id: NodeId) -> Children<'_> {
+        Children {
+            doc: self,
+            next: self.node(id).first_child,
+        }
+    }
+
     /// Load and parse an XML file (UTF-8).
     pub fn load_file(&mut self, path: &std::path::Path) -> Result<()> {
         let read_result = std::fs::read_to_string(path);
@@ -361,6 +394,8 @@ impl XmlDocument {
     }
 
     /// Serialize the whole document to a string. `compact` removes indentation.
+    /// A leading UTF-8 BOM is emitted when [`set_bom`](Self::set_bom) is enabled
+    /// (parsing BOM-prefixed input enables it automatically).
     pub fn print_to_string(&self, compact: bool) -> String {
         let mut printer = crate::printer::XmlPrinter::new(compact);
         let mut child = self.node(self.root()).first_child;
@@ -368,7 +403,12 @@ impl XmlDocument {
             self.accept(c, &mut printer);
             child = self.node(c).next_sibling;
         }
-        let mut s = printer.into_string();
+        let body = printer.into_string();
+        let mut s = String::new();
+        if self.write_bom {
+            s.push_str(crate::strutil::BOM);
+        }
+        s.push_str(&body);
         if !compact && !s.ends_with('\n') {
             s.push('\n');
         }
@@ -441,9 +481,78 @@ impl<'a> Iterator for ChildElements<'a> {
     }
 }
 
+/// Iterator over all child nodes of a node (any kind).
+pub struct Children<'a> {
+    doc: &'a XmlDocument,
+    next: Option<NodeId>,
+}
+
+impl Iterator for Children<'_> {
+    type Item = NodeId;
+    fn next(&mut self) -> Option<NodeId> {
+        let cur = self.next?;
+        self.next = self.doc.node(cur).next_sibling;
+        Some(cur)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn insert_after_child_links_correctly() {
+        let mut doc = XmlDocument::new();
+        let root = doc.new_element("root");
+        doc.insert_end_child(doc.root(), root);
+        let a = doc.new_element("a");
+        let c = doc.new_element("c");
+        doc.insert_end_child(root, a);
+        doc.insert_end_child(root, c);
+        // Insert b between a and c.
+        let b = doc.new_element("b");
+        doc.insert_after_child(root, a, b);
+
+        let names: Vec<String> = doc
+            .child_elements(root, None)
+            .map(|id| doc.name(id).unwrap().to_string())
+            .collect();
+        assert_eq!(names, vec!["a", "b", "c"]);
+        assert_eq!(doc.next_sibling(b), Some(c));
+
+        // Inserting after the last child updates last_child.
+        let d = doc.new_element("d");
+        doc.insert_after_child(root, c, d);
+        let names: Vec<String> = doc
+            .child_elements(root, None)
+            .map(|id| doc.name(id).unwrap().to_string())
+            .collect();
+        assert_eq!(names, vec!["a", "b", "c", "d"]);
+    }
+
+    #[test]
+    fn children_iterates_all_node_kinds() {
+        let mut doc = XmlDocument::new();
+        doc.parse("<a><!--c-->text<b/></a>").unwrap();
+        let a = doc.root_element().unwrap();
+        assert_eq!(doc.children(a).count(), 3); // comment, text, element
+    }
+
+    #[test]
+    fn bom_is_round_tripped() {
+        let mut doc = XmlDocument::new();
+        doc.parse("\u{feff}<a/>").unwrap();
+        assert!(doc.has_bom());
+        assert_eq!(doc.print_to_string(true), "\u{feff}<a/>");
+
+        // A document without a BOM stays BOM-free unless explicitly enabled.
+        let mut doc2 = XmlDocument::new();
+        doc2.parse("<a/>").unwrap();
+        assert!(!doc2.has_bom());
+        assert_eq!(doc2.print_to_string(true), "<a/>");
+        doc2.set_bom(true);
+        assert_eq!(doc2.print_to_string(true), "\u{feff}<a/>");
+    }
 
     #[test]
     fn build_tree_and_navigate() {
