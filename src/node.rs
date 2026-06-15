@@ -4,17 +4,12 @@ use crate::arena::NodeId;
 use crate::attribute::Attribute;
 
 /// Whitespace handling mode (tinyxml2 `Whitespace`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Whitespace {
+    #[default]
     Preserve,
     Collapse,
     Pedantic,
-}
-
-impl Default for Whitespace {
-    fn default() -> Self {
-        Whitespace::Preserve
-    }
 }
 
 /// How an element was closed (tinyxml2 `ElementClosingType`).
