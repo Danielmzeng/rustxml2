@@ -1,0 +1,8 @@
+# This machine's only working MSVC linker ships with the ScopeCppSDK (vc15);
+# the regular VC\Tools\MSVC toolchains are empty stubs. Pin the linker and the
+# library search paths here so `cargo build`/`test` work without per-shell setup.
+[target.x86_64-pc-windows-msvc]
+linker = 'C:\Program Files\Microsoft Visual Studio\18\Community\SDK\ScopeCppSDK\vc15\VC\bin\link.exe'
+
+[env]
+LIB = { value = 'C:\Program Files\Microsoft Visual Studio\18\Community\SDK\ScopeCppSDK\vc15\VC\lib;C:\Program Files\Microsoft Visual Studio\18\Community\SDK\ScopeCppSDK\vc15\SDK\lib', force = true }

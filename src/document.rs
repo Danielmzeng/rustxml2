@@ -1,0 +1,707 @@
+//! The document: owns the arena and exposes navigation/mutation.
+
+use crate::arena::{Arena, NodeId};
+use crate::attribute::{Attribute, XmlValue};
+use crate::error::{Result, XmlError};
+use crate::node::{ElementData, NodeData, NodeKind, TextData, Whitespace};
+
+pub const MAX_ELEMENT_DEPTH: i32 = 500;
+
+pub struct XmlDocument {
+    pub(crate) nodes: Arena<NodeData>,
+    root: NodeId,
+    pub(crate) whitespace_mode: Whitespace,
+    pub(crate) process_entities: bool,
+    pub(crate) write_bom: bool,
+    pub(crate) error: Option<XmlError>,
+    pub(crate) error_str: String,
+    pub(crate) error_line: i32,
+}
+
+impl XmlDocument {
+    pub fn new() -> Self {
+        let mut nodes = Arena::new();
+        let root = nodes.insert(NodeData::new(NodeKind::Document, String::new()));
+        XmlDocument {
+            nodes,
+            root,
+            whitespace_mode: Whitespace::Preserve,
+            process_entities: true,
+            write_bom: false,
+            error: None,
+            error_str: String::new(),
+            error_line: 0,
+        }
+    }
+
+    // ---- options ----
+    pub fn set_whitespace_mode(&mut self, mode: Whitespace) {
+        self.whitespace_mode = mode;
+    }
+    pub fn set_process_entities(&mut self, on: bool) {
+        self.process_entities = on;
+    }
+    /// Control whether a leading UTF-8 BOM is written by the printer
+    /// (port of tinyxml2 `XMLDocument::SetBOM`).
+    pub fn set_bom(&mut self, on: bool) {
+        self.write_bom = on;
+    }
+    /// Whether a BOM will be written (set automatically when parsing
+    /// BOM-prefixed input).
+    pub fn has_bom(&self) -> bool {
+        self.write_bom
+    }
+
+    // ---- error state ----
+    pub fn error(&self) -> Option<XmlError> {
+        self.error
+    }
+    pub fn error_str(&self) -> &str {
+        &self.error_str
+    }
+    pub fn error_line(&self) -> i32 {
+        self.error_line
+    }
+    pub(crate) fn set_error(&mut self, err: XmlError, line: i32, detail: &str) -> XmlError {
+        self.error = Some(err);
+        self.error_line = line;
+        self.error_str = format!("{} (line {}): {}", err.name(), line, detail);
+        err
+    }
+
+    // ---- node access ----
+    pub fn root(&self) -> NodeId {
+        self.root
+    }
+    pub(crate) fn node(&self, id: NodeId) -> &NodeData {
+        self.nodes.get(id).expect("stale NodeId")
+    }
+    pub(crate) fn node_mut(&mut self, id: NodeId) -> &mut NodeData {
+        self.nodes.get_mut(id).expect("stale NodeId")
+    }
+    pub fn is_valid(&self, id: NodeId) -> bool {
+        self.nodes.contains(id)
+    }
+
+    // ---- construction ----
+    pub fn new_element(&mut self, name: &str) -> NodeId {
+        self.nodes.insert(NodeData::new(
+            NodeKind::Element(ElementData::default()),
+            name.to_string(),
+        ))
+    }
+    pub fn new_text(&mut self, text: &str) -> NodeId {
+        self.nodes.insert(NodeData::new(
+            NodeKind::Text(TextData { cdata: false }),
+            text.to_string(),
+        ))
+    }
+    pub fn new_comment(&mut self, text: &str) -> NodeId {
+        self.nodes
+            .insert(NodeData::new(NodeKind::Comment, text.to_string()))
+    }
+    pub fn new_declaration(&mut self, text: &str) -> NodeId {
+        self.nodes
+            .insert(NodeData::new(NodeKind::Declaration, text.to_string()))
+    }
+    pub fn new_unknown(&mut self, text: &str) -> NodeId {
+        self.nodes
+            .insert(NodeData::new(NodeKind::Unknown, text.to_string()))
+    }
+
+    // ---- linking ----
+    pub fn insert_end_child(&mut self, parent: NodeId, child: NodeId) -> NodeId {
+        // Unlink from any current parent first (matches tinyxml2 InsertEndChild)
+        // so the node never lives in two child lists.
+        self.detach(child);
+        self.node_mut(child).parent = Some(parent);
+        match self.node(parent).last_child {
+            Some(last) => {
+                self.node_mut(last).next_sibling = Some(child);
+                self.node_mut(child).prev_sibling = Some(last);
+                self.node_mut(parent).last_child = Some(child);
+            }
+            None => {
+                self.node_mut(parent).first_child = Some(child);
+                self.node_mut(parent).last_child = Some(child);
+            }
+        }
+        child
+    }
+
+    pub fn insert_first_child(&mut self, parent: NodeId, child: NodeId) -> NodeId {
+        self.detach(child);
+        self.node_mut(child).parent = Some(parent);
+        match self.node(parent).first_child {
+            Some(first) => {
+                self.node_mut(first).prev_sibling = Some(child);
+                self.node_mut(child).next_sibling = Some(first);
+                self.node_mut(parent).first_child = Some(child);
+            }
+            None => {
+                self.node_mut(parent).first_child = Some(child);
+                self.node_mut(parent).last_child = Some(child);
+            }
+        }
+        child
+    }
+
+    /// Insert `child` immediately after the existing child `after` (which must
+    /// already be a child of `parent`).
+    pub fn insert_after_child(&mut self, parent: NodeId, after: NodeId, child: NodeId) -> NodeId {
+        self.detach(child);
+        self.node_mut(child).parent = Some(parent);
+        let next = self.node(after).next_sibling;
+        self.node_mut(after).next_sibling = Some(child);
+        self.node_mut(child).prev_sibling = Some(after);
+        self.node_mut(child).next_sibling = next;
+        match next {
+            Some(n) => self.node_mut(n).prev_sibling = Some(child),
+            None => self.node_mut(parent).last_child = Some(child),
+        }
+        child
+    }
+
+    fn detach(&mut self, id: NodeId) {
+        let (parent, prev, next) = {
+            let n = self.node(id);
+            (n.parent, n.prev_sibling, n.next_sibling)
+        };
+        match prev {
+            Some(p) => self.node_mut(p).next_sibling = next,
+            None => {
+                if let Some(par) = parent {
+                    self.node_mut(par).first_child = next;
+                }
+            }
+        }
+        match next {
+            Some(n) => self.node_mut(n).prev_sibling = prev,
+            None => {
+                if let Some(par) = parent {
+                    self.node_mut(par).last_child = prev;
+                }
+            }
+        }
+        let n = self.node_mut(id);
+        n.parent = None;
+        n.prev_sibling = None;
+        n.next_sibling = None;
+    }
+
+    /// Detach `id` from its parent and recursively remove it and its subtree.
+    pub fn delete_node(&mut self, id: NodeId) {
+        self.detach(id);
+        self.delete_children(id);
+        self.nodes.remove(id);
+    }
+
+    /// Recursively remove all descendants of `id` (but not `id` itself).
+    pub fn delete_children(&mut self, id: NodeId) {
+        let mut child = self.node(id).first_child;
+        while let Some(c) = child {
+            let next = self.node(c).next_sibling;
+            self.delete_children(c);
+            self.nodes.remove(c);
+            child = next;
+        }
+        let n = self.node_mut(id);
+        n.first_child = None;
+        n.last_child = None;
+    }
+
+    // ---- navigation ----
+    // Read-only navigation tolerates a stale/foreign `NodeId` by returning
+    // `None` rather than panicking (the generational arena rejects the handle).
+    pub fn parent(&self, id: NodeId) -> Option<NodeId> {
+        self.nodes.get(id)?.parent
+    }
+    pub fn first_child(&self, id: NodeId) -> Option<NodeId> {
+        self.nodes.get(id)?.first_child
+    }
+    pub fn next_sibling(&self, id: NodeId) -> Option<NodeId> {
+        self.nodes.get(id)?.next_sibling
+    }
+
+    pub(crate) fn matches_element(&self, id: NodeId, name: Option<&str>) -> bool {
+        let n = self.node(id);
+        n.is_element() && name.is_none_or(|want| n.value == want)
+    }
+
+    pub fn first_child_element(&self, id: NodeId, name: Option<&str>) -> Option<NodeId> {
+        let mut child = self.nodes.get(id)?.first_child;
+        while let Some(c) = child {
+            if self.matches_element(c, name) {
+                return Some(c);
+            }
+            child = self.node(c).next_sibling;
+        }
+        None
+    }
+
+    pub fn next_sibling_element(&self, id: NodeId, name: Option<&str>) -> Option<NodeId> {
+        let mut sib = self.nodes.get(id)?.next_sibling;
+        while let Some(s) = sib {
+            if self.matches_element(s, name) {
+                return Some(s);
+            }
+            sib = self.node(s).next_sibling;
+        }
+        None
+    }
+
+    /// The first child element of the document (the document root element).
+    pub fn root_element(&self) -> Option<NodeId> {
+        self.first_child_element(self.root, None)
+    }
+
+    // ---- element name & text ----
+    pub fn name(&self, id: NodeId) -> Option<&str> {
+        let n = self.nodes.get(id)?;
+        if n.is_element() {
+            Some(&n.value)
+        } else {
+            None
+        }
+    }
+    pub fn set_name(&mut self, id: NodeId, name: &str) {
+        self.node_mut(id).value = name.to_string();
+    }
+
+    /// Text of an element: the value of its first child text node.
+    pub fn text(&self, id: NodeId) -> Option<&str> {
+        let child = self.nodes.get(id)?.first_child?;
+        let n = self.node(child);
+        if n.is_text() {
+            Some(&n.value)
+        } else {
+            None
+        }
+    }
+
+    /// Set the element's text content (port of tinyxml2 `XMLElement::SetText`).
+    /// If the first child is already a text node its value is replaced in place;
+    /// otherwise a new text node is inserted as the **first** child (so that
+    /// [`text`](Self::text), which reads the first child, observes it). When the
+    /// element has other leading children (e.g. a comment) this places the text
+    /// ahead of them — matching tinyxml2's behavior.
+    pub fn set_text(&mut self, id: NodeId, text: &str) {
+        if let Some(child) = self.node(id).first_child {
+            if self.node(child).is_text() {
+                self.node_mut(child).value = text.to_string();
+                return;
+            }
+        }
+        let t = self.new_text(text);
+        self.insert_first_child(id, t);
+    }
+
+    // ---- attributes ----
+    fn element_data(&self, id: NodeId) -> Option<&ElementData> {
+        match &self.nodes.get(id)?.kind {
+            NodeKind::Element(d) => Some(d),
+            _ => None,
+        }
+    }
+    fn element_data_mut(&mut self, id: NodeId) -> Option<&mut ElementData> {
+        match &mut self.node_mut(id).kind {
+            NodeKind::Element(d) => Some(d),
+            _ => None,
+        }
+    }
+
+    pub fn attribute(&self, id: NodeId, name: &str) -> Option<&str> {
+        self.element_data(id)?
+            .attributes
+            .iter()
+            .find(|a| a.name == name)
+            .map(|a| a.value.as_str())
+    }
+
+    pub fn set_attribute<V: XmlValue>(&mut self, id: NodeId, name: &str, value: V) {
+        let value = value.to_xml_string();
+        if let Some(data) = self.element_data_mut(id) {
+            if let Some(a) = data.attributes.iter_mut().find(|a| a.name == name) {
+                a.value = value;
+            } else {
+                data.attributes.push(Attribute {
+                    name: name.to_string(),
+                    value,
+                });
+            }
+        }
+    }
+
+    pub fn delete_attribute(&mut self, id: NodeId, name: &str) {
+        if let Some(data) = self.element_data_mut(id) {
+            data.attributes.retain(|a| a.name != name);
+        }
+    }
+
+    fn find_attribute(&self, id: NodeId, name: &str) -> Result<&Attribute> {
+        self.element_data(id)
+            .and_then(|d| d.attributes.iter().find(|a| a.name == name))
+            .ok_or(XmlError::NoAttribute)
+    }
+
+    pub fn query_int_attribute(&self, id: NodeId, name: &str) -> Result<i32> {
+        self.find_attribute(id, name)?.as_i32()
+    }
+    pub fn query_int64_attribute(&self, id: NodeId, name: &str) -> Result<i64> {
+        self.find_attribute(id, name)?.as_i64()
+    }
+    pub fn query_unsigned_attribute(&self, id: NodeId, name: &str) -> Result<u32> {
+        self.find_attribute(id, name)?.as_u32()
+    }
+    pub fn query_float_attribute(&self, id: NodeId, name: &str) -> Result<f32> {
+        self.find_attribute(id, name)?.as_f32()
+    }
+    pub fn query_double_attribute(&self, id: NodeId, name: &str) -> Result<f64> {
+        self.find_attribute(id, name)?.as_f64()
+    }
+    pub fn query_bool_attribute(&self, id: NodeId, name: &str) -> Result<bool> {
+        self.find_attribute(id, name)?.as_bool()
+    }
+
+    pub fn child_elements<'a>(&'a self, id: NodeId, name: Option<&'a str>) -> ChildElements<'a> {
+        ChildElements {
+            doc: self,
+            next: self.nodes.get(id).and_then(|n| n.first_child),
+            name,
+        }
+    }
+
+    /// Iterate over all child nodes of `id` (every kind, not just elements).
+    pub fn children(&self, id: NodeId) -> Children<'_> {
+        Children {
+            doc: self,
+            next: self.nodes.get(id).and_then(|n| n.first_child),
+        }
+    }
+
+    /// Load and parse an XML file (UTF-8).
+    pub fn load_file(&mut self, path: &std::path::Path) -> Result<()> {
+        let read_result = std::fs::read_to_string(path);
+        let content = match read_result {
+            Ok(s) => s,
+            Err(e) => {
+                let err = match e.kind() {
+                    std::io::ErrorKind::NotFound => {
+                        self.set_error(XmlError::FileNotFound, 0, "file not found")
+                    }
+                    std::io::ErrorKind::PermissionDenied => {
+                        self.set_error(XmlError::FileCouldNotBeOpened, 0, "permission denied")
+                    }
+                    _ => self.set_error(XmlError::FileReadError, 0, "read error"),
+                };
+                return Err(err);
+            }
+        };
+        self.parse(&content)
+    }
+
+    /// Serialize and write the document to a file.
+    pub fn save_file(&self, path: &std::path::Path, compact: bool) -> Result<()> {
+        std::fs::write(path, self.print_to_string(compact))
+            .map_err(|_| XmlError::FileCouldNotBeOpened)
+    }
+
+    /// Serialize the whole document to a string. `compact` removes indentation.
+    /// A leading UTF-8 BOM is emitted when [`set_bom`](Self::set_bom) is enabled
+    /// (parsing BOM-prefixed input enables it automatically).
+    pub fn print_to_string(&self, compact: bool) -> String {
+        let mut printer = crate::printer::XmlPrinter::new(compact);
+        let mut child = self.node(self.root()).first_child;
+        while let Some(c) = child {
+            self.accept(c, &mut printer);
+            child = self.node(c).next_sibling;
+        }
+        let body = printer.into_string();
+        let mut s = String::new();
+        if self.write_bom {
+            s.push_str(crate::strutil::BOM);
+        }
+        s.push_str(&body);
+        if !compact && !s.ends_with('\n') {
+            s.push('\n');
+        }
+        s
+    }
+
+    /// Traverse the subtree rooted at `id`, dispatching to `visitor`.
+    /// A stale/foreign `id` is ignored (no traversal) rather than panicking.
+    pub fn accept(&self, id: NodeId, visitor: &mut dyn crate::visitor::XmlVisitor) {
+        use crate::node::NodeKind;
+        if !self.nodes.contains(id) {
+            return;
+        }
+        match &self.node(id).kind {
+            NodeKind::Document => {
+                if visitor.visit_enter_document(self, id) {
+                    self.accept_children(id, visitor);
+                }
+                visitor.visit_exit_document(self, id);
+            }
+            NodeKind::Element(_) => {
+                if visitor.visit_enter_element(self, id) {
+                    self.accept_children(id, visitor);
+                }
+                visitor.visit_exit_element(self, id);
+            }
+            NodeKind::Text(_) => {
+                visitor.visit_text(self, id);
+            }
+            NodeKind::Comment => {
+                visitor.visit_comment(self, id);
+            }
+            NodeKind::Declaration => {
+                visitor.visit_declaration(self, id);
+            }
+            NodeKind::Unknown => {
+                visitor.visit_unknown(self, id);
+            }
+        }
+    }
+
+    fn accept_children(&self, id: NodeId, visitor: &mut dyn crate::visitor::XmlVisitor) {
+        let mut child = self.node(id).first_child;
+        while let Some(c) = child {
+            self.accept(c, visitor);
+            child = self.node(c).next_sibling;
+        }
+    }
+}
+
+impl Default for XmlDocument {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Iterator over child elements of a node, optionally filtered by name.
+pub struct ChildElements<'a> {
+    doc: &'a XmlDocument,
+    next: Option<NodeId>,
+    name: Option<&'a str>,
+}
+
+impl<'a> Iterator for ChildElements<'a> {
+    type Item = NodeId;
+    fn next(&mut self) -> Option<NodeId> {
+        while let Some(cur) = self.next {
+            self.next = self.doc.node(cur).next_sibling;
+            if self.doc.matches_element(cur, self.name) {
+                return Some(cur);
+            }
+        }
+        None
+    }
+}
+
+/// Iterator over all child nodes of a node (any kind).
+pub struct Children<'a> {
+    doc: &'a XmlDocument,
+    next: Option<NodeId>,
+}
+
+impl Iterator for Children<'_> {
+    type Item = NodeId;
+    fn next(&mut self) -> Option<NodeId> {
+        let cur = self.next?;
+        self.next = self.doc.node(cur).next_sibling;
+        Some(cur)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reinsert_moves_node_without_duplicating() {
+        let mut doc = XmlDocument::new();
+        let p1 = doc.new_element("p1");
+        let p2 = doc.new_element("p2");
+        doc.insert_end_child(doc.root(), p1);
+        doc.insert_end_child(doc.root(), p2);
+        let x = doc.new_element("x");
+        doc.insert_end_child(p1, x);
+        // Re-inserting x under p2 must unlink it from p1's child list.
+        doc.insert_end_child(p2, x);
+        assert_eq!(doc.parent(x), Some(p2));
+        assert_eq!(doc.first_child(p1), None);
+        assert_eq!(doc.child_elements(p1, None).count(), 0);
+        assert_eq!(doc.first_child_element(p2, Some("x")), Some(x));
+    }
+
+    #[test]
+    fn stale_node_id_navigation_is_safe() {
+        let mut doc = XmlDocument::new();
+        let root = doc.new_element("root");
+        doc.insert_end_child(doc.root(), root);
+        let a = doc.new_element("a");
+        doc.insert_end_child(root, a);
+        doc.delete_node(a);
+        // Every read path tolerates the now-stale id without panicking.
+        assert!(!doc.is_valid(a));
+        assert_eq!(doc.first_child(a), None);
+        assert_eq!(doc.next_sibling(a), None);
+        assert_eq!(doc.parent(a), None);
+        assert_eq!(doc.name(a), None);
+        assert_eq!(doc.text(a), None);
+        assert_eq!(doc.attribute(a, "x"), None);
+        assert_eq!(doc.first_child_element(a, None), None);
+        assert_eq!(doc.child_elements(a, None).count(), 0);
+        assert_eq!(doc.children(a).count(), 0);
+    }
+
+    #[test]
+    fn insert_after_child_links_correctly() {
+        let mut doc = XmlDocument::new();
+        let root = doc.new_element("root");
+        doc.insert_end_child(doc.root(), root);
+        let a = doc.new_element("a");
+        let c = doc.new_element("c");
+        doc.insert_end_child(root, a);
+        doc.insert_end_child(root, c);
+        // Insert b between a and c.
+        let b = doc.new_element("b");
+        doc.insert_after_child(root, a, b);
+
+        let names: Vec<String> = doc
+            .child_elements(root, None)
+            .map(|id| doc.name(id).unwrap().to_string())
+            .collect();
+        assert_eq!(names, vec!["a", "b", "c"]);
+        assert_eq!(doc.next_sibling(b), Some(c));
+
+        // Inserting after the last child updates last_child.
+        let d = doc.new_element("d");
+        doc.insert_after_child(root, c, d);
+        let names: Vec<String> = doc
+            .child_elements(root, None)
+            .map(|id| doc.name(id).unwrap().to_string())
+            .collect();
+        assert_eq!(names, vec!["a", "b", "c", "d"]);
+    }
+
+    #[test]
+    fn children_iterates_all_node_kinds() {
+        let mut doc = XmlDocument::new();
+        doc.parse("<a><!--c-->text<b/></a>").unwrap();
+        let a = doc.root_element().unwrap();
+        assert_eq!(doc.children(a).count(), 3); // comment, text, element
+    }
+
+    #[test]
+    fn bom_is_round_tripped() {
+        let mut doc = XmlDocument::new();
+        doc.parse("\u{feff}<a/>").unwrap();
+        assert!(doc.has_bom());
+        assert_eq!(doc.print_to_string(true), "\u{feff}<a/>");
+
+        // A document without a BOM stays BOM-free unless explicitly enabled.
+        let mut doc2 = XmlDocument::new();
+        doc2.parse("<a/>").unwrap();
+        assert!(!doc2.has_bom());
+        assert_eq!(doc2.print_to_string(true), "<a/>");
+        doc2.set_bom(true);
+        assert_eq!(doc2.print_to_string(true), "\u{feff}<a/>");
+    }
+
+    #[test]
+    fn build_tree_and_navigate() {
+        let mut doc = XmlDocument::new();
+        let root = doc.new_element("root");
+        doc.insert_end_child(doc.root(), root);
+
+        let a = doc.new_element("a");
+        let b = doc.new_element("b");
+        doc.insert_end_child(root, a);
+        doc.insert_end_child(root, b);
+
+        assert_eq!(doc.name(root), Some("root"));
+        assert_eq!(doc.first_child_element(root, None), Some(a));
+        assert_eq!(doc.next_sibling_element(a, None), Some(b));
+        assert_eq!(doc.first_child_element(root, Some("b")), Some(b));
+        assert_eq!(doc.parent(a), Some(root));
+    }
+
+    #[test]
+    fn attributes_roundtrip() {
+        let mut doc = XmlDocument::new();
+        let e = doc.new_element("e");
+        doc.set_attribute(e, "id", 5i32);
+        doc.set_attribute(e, "ok", true);
+        assert_eq!(doc.attribute(e, "id"), Some("5"));
+        assert_eq!(doc.query_int_attribute(e, "id"), Ok(5));
+        assert_eq!(doc.query_bool_attribute(e, "ok"), Ok(true));
+        assert_eq!(
+            doc.query_int_attribute(e, "missing"),
+            Err(XmlError::NoAttribute)
+        );
+    }
+
+    #[test]
+    fn set_and_get_text() {
+        let mut doc = XmlDocument::new();
+        let e = doc.new_element("e");
+        doc.set_text(e, "hello");
+        assert_eq!(doc.text(e), Some("hello"));
+    }
+
+    #[test]
+    fn delete_node_detaches_and_invalidates() {
+        let mut doc = XmlDocument::new();
+        let root = doc.new_element("root");
+        doc.insert_end_child(doc.root(), root);
+        let a = doc.new_element("a");
+        doc.insert_end_child(root, a);
+        doc.delete_node(a);
+        assert_eq!(doc.first_child_element(root, None), None);
+    }
+
+    #[test]
+    fn iterate_child_elements() {
+        let mut doc = XmlDocument::new();
+        let root = doc.new_element("root");
+        doc.insert_end_child(doc.root(), root);
+        for n in ["a", "b", "c"] {
+            let e = doc.new_element(n);
+            doc.insert_end_child(root, e);
+        }
+        let names: Vec<String> = doc
+            .child_elements(root, None)
+            .map(|id| doc.name(id).unwrap().to_string())
+            .collect();
+        assert_eq!(names, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn collapse_whitespace_mode() {
+        let mut doc = XmlDocument::new();
+        doc.set_whitespace_mode(crate::Whitespace::Collapse);
+        doc.parse("<a>   hello     world   </a>").unwrap();
+        let a = doc.root_element().unwrap();
+        assert_eq!(doc.text(a), Some("hello world"));
+    }
+
+    #[test]
+    fn load_and_save_file_roundtrip() {
+        let dir = std::env::temp_dir();
+        let path = dir.join("rustxml2_io_test.xml");
+        std::fs::write(&path, r#"<root a="1"><child/></root>"#).unwrap();
+
+        let mut doc = XmlDocument::new();
+        doc.load_file(&path).unwrap();
+        assert_eq!(doc.name(doc.root_element().unwrap()), Some("root"));
+
+        let out = dir.join("rustxml2_io_out.xml");
+        doc.save_file(&out, true).unwrap();
+        let written = std::fs::read_to_string(&out).unwrap();
+        assert_eq!(written, r#"<root a="1"><child/></root>"#);
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&out);
+    }
+}

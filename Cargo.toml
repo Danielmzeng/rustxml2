@@ -1,0 +1,8 @@
+[package]
+name = "rustxml2"
+version = "0.1.0"
+edition = "2021"
+description = "An idiomatic Rust port of the tinyxml2 XML DOM library"
+license = "Zlib"
+
+[dependencies]
