@@ -13,6 +13,13 @@ pub struct XmlPrinter {
     depth: usize,
     element_open: bool,
     first_element: bool,
+    /// Nonzero while inside an element that contains text: pretty whitespace is
+    /// suppressed so mixed content (e.g. `<p>Hi <b>x</b></p>`) is not corrupted
+    /// by injected newlines/indentation.
+    inline_depth: usize,
+    /// Per-open-element flag: did this element bump `inline_depth`? Popped on
+    /// exit so the decrement is balanced.
+    inline_stack: Vec<bool>,
 }
 
 impl XmlPrinter {
@@ -23,6 +30,8 @@ impl XmlPrinter {
             depth: 0,
             element_open: false,
             first_element: true,
+            inline_depth: 0,
+            inline_stack: Vec::new(),
         }
     }
 
@@ -30,8 +39,14 @@ impl XmlPrinter {
         self.out
     }
 
+    /// True when pretty whitespace should be suppressed (compact mode or inside
+    /// a text-bearing element).
+    fn suppress_ws(&self) -> bool {
+        self.compact || self.inline_depth > 0
+    }
+
     fn indent(&mut self) {
-        if !self.compact {
+        if !self.suppress_ws() {
             for _ in 0..self.depth {
                 self.out.push_str("    ");
             }
@@ -39,9 +54,20 @@ impl XmlPrinter {
     }
 
     fn newline(&mut self) {
-        if !self.compact {
+        if !self.suppress_ws() {
             self.out.push('\n');
         }
+    }
+
+    fn element_has_text_child(doc: &XmlDocument, id: NodeId) -> bool {
+        let mut child = doc.node(id).first_child;
+        while let Some(c) = child {
+            if doc.node(c).is_text() {
+                return true;
+            }
+            child = doc.node(c).next_sibling;
+        }
+        false
     }
 
     fn seal(&mut self) {
@@ -75,6 +101,13 @@ impl XmlVisitor for XmlPrinter {
         }
         self.element_open = true;
         self.depth += 1;
+        // If this element contains any text child, print it (and its subtree)
+        // inline so significant whitespace in mixed content is preserved.
+        let force_inline = Self::element_has_text_child(doc, id);
+        self.inline_stack.push(force_inline);
+        if force_inline {
+            self.inline_depth += 1;
+        }
         true
     }
 
@@ -99,6 +132,11 @@ impl XmlVisitor for XmlPrinter {
             self.out.push_str("</");
             self.out.push_str(&n.value);
             self.out.push('>');
+        }
+        // Balance the inline-suppression bump from enter. Done last so the close
+        // tag above is itself emitted under this element's inline state.
+        if self.inline_stack.pop().unwrap_or(false) {
+            self.inline_depth -= 1;
         }
         true
     }
@@ -146,6 +184,11 @@ impl XmlVisitor for XmlPrinter {
 
     fn visit_unknown(&mut self, doc: &XmlDocument, id: NodeId) -> bool {
         self.seal();
+        if !self.first_element {
+            self.newline();
+            self.indent();
+        }
+        self.first_element = false;
         self.out.push_str("<!");
         self.out.push_str(&doc.node(id).value);
         self.out.push('>');
@@ -182,6 +225,22 @@ mod tests {
         doc.set_text(e, "1<2&3");
         let out = doc.print_to_string(true);
         assert_eq!(out, r#"<e x="a&lt;b&amp;c">1&lt;2&amp;3</e>"#);
+    }
+
+    #[test]
+    fn mixed_content_pretty_preserves_inline_text() {
+        let mut doc = XmlDocument::new();
+        doc.parse("<p>Hello <b>world</b></p>").unwrap();
+        // An element containing text prints inline even in pretty mode, so no
+        // stray newline/indent is injected around the inline text.
+        assert_eq!(doc.print_to_string(false), "<p>Hello <b>world</b></p>\n");
+    }
+
+    #[test]
+    fn unknown_node_pretty_on_own_line() {
+        let mut doc = XmlDocument::new();
+        doc.parse("<!DOCTYPE x><root/>").unwrap();
+        assert_eq!(doc.print_to_string(false), "<!DOCTYPE x>\n<root/>\n");
     }
 
     #[test]

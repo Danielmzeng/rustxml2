@@ -1,5 +1,7 @@
 //! Port of tinyxml2 `XMLUtil`: entity encode/decode, bool parsing, BOM, predicates.
 
+use std::borrow::Cow;
+
 /// UTF-8 BOM byte sequence.
 pub const BOM: &str = "\u{feff}";
 
@@ -13,7 +15,12 @@ pub fn strip_bom(input: &str) -> (&str, bool) {
 
 /// Decode the five predefined XML entities plus numeric character references.
 /// Unrecognized `&...;` sequences are passed through verbatim (tinyxml2 behavior).
-pub fn decode_entities(input: &str) -> String {
+/// Borrows the input unchanged when it contains no `&`, avoiding an allocation
+/// on the common (entity-free) path.
+pub fn decode_entities(input: &str) -> Cow<'_, str> {
+    if !input.contains('&') {
+        return Cow::Borrowed(input);
+    }
     let mut out = String::with_capacity(input.len());
     let bytes = input.as_bytes();
     let mut i = 0;
@@ -29,7 +36,7 @@ pub fn decode_entities(input: &str) -> String {
         out.push(ch);
         i += ch.len_utf8();
     }
-    out
+    Cow::Owned(out)
 }
 
 /// Try to decode a single entity starting at `&`. Returns (char, bytes_consumed).
@@ -58,7 +65,12 @@ fn decode_one_entity(s: &str) -> Option<(char, usize)> {
 
 /// Escape characters that must be escaped in element text / attribute values.
 /// Note: apostrophe is NOT escaped (matches tinyxml2 default text behavior).
-pub fn encode_text(input: &str) -> String {
+/// Borrows the input unchanged when nothing needs escaping, avoiding an
+/// allocation on the common path.
+pub fn encode_text(input: &str) -> Cow<'_, str> {
+    if !input.contains(['&', '<', '>', '"']) {
+        return Cow::Borrowed(input);
+    }
     let mut out = String::with_capacity(input.len());
     for ch in input.chars() {
         match ch {
@@ -69,7 +81,7 @@ pub fn encode_text(input: &str) -> String {
             _ => out.push(ch),
         }
     }
-    out
+    Cow::Owned(out)
 }
 
 /// Parse a bool the way tinyxml2 does: accepts true/false/1/0, case-insensitive.
@@ -124,20 +136,24 @@ mod tests {
     #[test]
     fn decode_named_and_numeric_entities() {
         assert_eq!(
-            decode_entities("a &lt; b &amp; c &gt; &apos;&quot;"),
+            &*decode_entities("a &lt; b &amp; c &gt; &apos;&quot;"),
             "a < b & c > '\""
         );
-        assert_eq!(decode_entities("&#65;&#x42;"), "AB");
-        assert_eq!(decode_entities("no entities"), "no entities");
-        assert_eq!(decode_entities("&unknown;"), "&unknown;");
+        assert_eq!(&*decode_entities("&#65;&#x42;"), "AB");
+        assert_eq!(&*decode_entities("no entities"), "no entities");
+        assert_eq!(&*decode_entities("&unknown;"), "&unknown;");
+        // Entity-free input is borrowed, not reallocated.
+        assert!(matches!(decode_entities("plain"), Cow::Borrowed(_)));
     }
 
     #[test]
     fn encode_escapes_required_chars() {
         assert_eq!(
-            encode_text("a < b & c > \"x\" 'y'"),
+            &*encode_text("a < b & c > \"x\" 'y'"),
             "a &lt; b &amp; c &gt; &quot;x&quot; 'y'"
         );
+        // Nothing to escape -> borrowed.
+        assert!(matches!(encode_text("plain text"), Cow::Borrowed(_)));
     }
 
     #[test]

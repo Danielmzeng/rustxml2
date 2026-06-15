@@ -21,15 +21,31 @@ macro_rules! typed_accessor {
     };
 }
 
+/// Integer accessor that also accepts a `0x`/`0X` hex prefix, matching
+/// tinyxml2's `sscanf`-based `ToInt`/`ToUnsigned`/`ToInt64`/`ToUnsigned64`.
+macro_rules! typed_int_accessor {
+    ($method:ident, $ty:ty) => {
+        pub fn $method(&self) -> Result<$ty> {
+            let s = self.value.trim();
+            let parsed = if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+                <$ty>::from_str_radix(hex, 16)
+            } else {
+                s.parse::<$ty>()
+            };
+            parsed.map_err(|_| XmlError::WrongAttributeType)
+        }
+    };
+}
+
 impl Attribute {
     pub fn value(&self) -> &str {
         &self.value
     }
 
-    typed_accessor!(as_i32, i32);
-    typed_accessor!(as_i64, i64);
-    typed_accessor!(as_u32, u32);
-    typed_accessor!(as_u64, u64);
+    typed_int_accessor!(as_i32, i32);
+    typed_int_accessor!(as_i64, i64);
+    typed_int_accessor!(as_u32, u32);
+    typed_int_accessor!(as_u64, u64);
     typed_accessor!(as_f32, f32);
     typed_accessor!(as_f64, f64);
 
@@ -115,5 +131,26 @@ mod tests {
         assert_eq!(42i32.to_xml_string(), "42");
         assert_eq!(true.to_xml_string(), "true");
         assert_eq!("hi".to_xml_string(), "hi");
+    }
+
+    #[test]
+    fn hex_prefixed_integers() {
+        let a = Attribute {
+            name: "x".into(),
+            value: "0x1F".into(),
+        };
+        assert_eq!(a.as_i32(), Ok(31));
+        assert_eq!(a.as_u32(), Ok(31));
+        let b = Attribute {
+            name: "y".into(),
+            value: "0XFF".into(),
+        };
+        assert_eq!(b.as_i64(), Ok(255));
+        // Floats are unaffected by the hex path.
+        let c = Attribute {
+            name: "z".into(),
+            value: "3.5".into(),
+        };
+        assert_eq!(c.as_f64(), Ok(3.5));
     }
 }

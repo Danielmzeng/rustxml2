@@ -111,6 +111,9 @@ impl XmlDocument {
 
     // ---- linking ----
     pub fn insert_end_child(&mut self, parent: NodeId, child: NodeId) -> NodeId {
+        // Unlink from any current parent first (matches tinyxml2 InsertEndChild)
+        // so the node never lives in two child lists.
+        self.detach(child);
         self.node_mut(child).parent = Some(parent);
         match self.node(parent).last_child {
             Some(last) => {
@@ -127,6 +130,7 @@ impl XmlDocument {
     }
 
     pub fn insert_first_child(&mut self, parent: NodeId, child: NodeId) -> NodeId {
+        self.detach(child);
         self.node_mut(child).parent = Some(parent);
         match self.node(parent).first_child {
             Some(first) => {
@@ -145,6 +149,7 @@ impl XmlDocument {
     /// Insert `child` immediately after the existing child `after` (which must
     /// already be a child of `parent`).
     pub fn insert_after_child(&mut self, parent: NodeId, after: NodeId, child: NodeId) -> NodeId {
+        self.detach(child);
         self.node_mut(child).parent = Some(parent);
         let next = self.node(after).next_sibling;
         self.node_mut(after).next_sibling = Some(child);
@@ -206,14 +211,16 @@ impl XmlDocument {
     }
 
     // ---- navigation ----
+    // Read-only navigation tolerates a stale/foreign `NodeId` by returning
+    // `None` rather than panicking (the generational arena rejects the handle).
     pub fn parent(&self, id: NodeId) -> Option<NodeId> {
-        self.node(id).parent
+        self.nodes.get(id)?.parent
     }
     pub fn first_child(&self, id: NodeId) -> Option<NodeId> {
-        self.node(id).first_child
+        self.nodes.get(id)?.first_child
     }
     pub fn next_sibling(&self, id: NodeId) -> Option<NodeId> {
-        self.node(id).next_sibling
+        self.nodes.get(id)?.next_sibling
     }
 
     pub(crate) fn matches_element(&self, id: NodeId, name: Option<&str>) -> bool {
@@ -222,7 +229,7 @@ impl XmlDocument {
     }
 
     pub fn first_child_element(&self, id: NodeId, name: Option<&str>) -> Option<NodeId> {
-        let mut child = self.node(id).first_child;
+        let mut child = self.nodes.get(id)?.first_child;
         while let Some(c) = child {
             if self.matches_element(c, name) {
                 return Some(c);
@@ -233,7 +240,7 @@ impl XmlDocument {
     }
 
     pub fn next_sibling_element(&self, id: NodeId, name: Option<&str>) -> Option<NodeId> {
-        let mut sib = self.node(id).next_sibling;
+        let mut sib = self.nodes.get(id)?.next_sibling;
         while let Some(s) = sib {
             if self.matches_element(s, name) {
                 return Some(s);
@@ -250,7 +257,7 @@ impl XmlDocument {
 
     // ---- element name & text ----
     pub fn name(&self, id: NodeId) -> Option<&str> {
-        let n = self.node(id);
+        let n = self.nodes.get(id)?;
         if n.is_element() {
             Some(&n.value)
         } else {
@@ -263,7 +270,7 @@ impl XmlDocument {
 
     /// Text of an element: the value of its first child text node.
     pub fn text(&self, id: NodeId) -> Option<&str> {
-        let child = self.node(id).first_child?;
+        let child = self.nodes.get(id)?.first_child?;
         let n = self.node(child);
         if n.is_text() {
             Some(&n.value)
@@ -272,6 +279,12 @@ impl XmlDocument {
         }
     }
 
+    /// Set the element's text content (port of tinyxml2 `XMLElement::SetText`).
+    /// If the first child is already a text node its value is replaced in place;
+    /// otherwise a new text node is inserted as the **first** child (so that
+    /// [`text`](Self::text), which reads the first child, observes it). When the
+    /// element has other leading children (e.g. a comment) this places the text
+    /// ahead of them — matching tinyxml2's behavior.
     pub fn set_text(&mut self, id: NodeId, text: &str) {
         if let Some(child) = self.node(id).first_child {
             if self.node(child).is_text() {
@@ -285,7 +298,7 @@ impl XmlDocument {
 
     // ---- attributes ----
     fn element_data(&self, id: NodeId) -> Option<&ElementData> {
-        match &self.node(id).kind {
+        match &self.nodes.get(id)?.kind {
             NodeKind::Element(d) => Some(d),
             _ => None,
         }
@@ -353,7 +366,7 @@ impl XmlDocument {
     pub fn child_elements<'a>(&'a self, id: NodeId, name: Option<&'a str>) -> ChildElements<'a> {
         ChildElements {
             doc: self,
-            next: self.node(id).first_child,
+            next: self.nodes.get(id).and_then(|n| n.first_child),
             name,
         }
     }
@@ -362,7 +375,7 @@ impl XmlDocument {
     pub fn children(&self, id: NodeId) -> Children<'_> {
         Children {
             doc: self,
-            next: self.node(id).first_child,
+            next: self.nodes.get(id).and_then(|n| n.first_child),
         }
     }
 
@@ -416,8 +429,12 @@ impl XmlDocument {
     }
 
     /// Traverse the subtree rooted at `id`, dispatching to `visitor`.
+    /// A stale/foreign `id` is ignored (no traversal) rather than panicking.
     pub fn accept(&self, id: NodeId, visitor: &mut dyn crate::visitor::XmlVisitor) {
         use crate::node::NodeKind;
+        if !self.nodes.contains(id) {
+            return;
+        }
         match &self.node(id).kind {
             NodeKind::Document => {
                 if visitor.visit_enter_document(self, id) {
@@ -499,6 +516,44 @@ impl Iterator for Children<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reinsert_moves_node_without_duplicating() {
+        let mut doc = XmlDocument::new();
+        let p1 = doc.new_element("p1");
+        let p2 = doc.new_element("p2");
+        doc.insert_end_child(doc.root(), p1);
+        doc.insert_end_child(doc.root(), p2);
+        let x = doc.new_element("x");
+        doc.insert_end_child(p1, x);
+        // Re-inserting x under p2 must unlink it from p1's child list.
+        doc.insert_end_child(p2, x);
+        assert_eq!(doc.parent(x), Some(p2));
+        assert_eq!(doc.first_child(p1), None);
+        assert_eq!(doc.child_elements(p1, None).count(), 0);
+        assert_eq!(doc.first_child_element(p2, Some("x")), Some(x));
+    }
+
+    #[test]
+    fn stale_node_id_navigation_is_safe() {
+        let mut doc = XmlDocument::new();
+        let root = doc.new_element("root");
+        doc.insert_end_child(doc.root(), root);
+        let a = doc.new_element("a");
+        doc.insert_end_child(root, a);
+        doc.delete_node(a);
+        // Every read path tolerates the now-stale id without panicking.
+        assert!(!doc.is_valid(a));
+        assert_eq!(doc.first_child(a), None);
+        assert_eq!(doc.next_sibling(a), None);
+        assert_eq!(doc.parent(a), None);
+        assert_eq!(doc.name(a), None);
+        assert_eq!(doc.text(a), None);
+        assert_eq!(doc.attribute(a, "x"), None);
+        assert_eq!(doc.first_child_element(a, None), None);
+        assert_eq!(doc.child_elements(a, None).count(), 0);
+        assert_eq!(doc.children(a).count(), 0);
+    }
 
     #[test]
     fn insert_after_child_links_correctly() {

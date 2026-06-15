@@ -5,6 +5,7 @@ use crate::document::{XmlDocument, MAX_ELEMENT_DEPTH};
 use crate::error::{Result, XmlError};
 use crate::node::{NodeKind, TextData};
 use crate::strutil::{decode_entities, is_name_char, is_name_start_char, is_whitespace, strip_bom};
+use std::borrow::Cow;
 
 /// Cursor over the input with line tracking.
 struct Cursor<'a> {
@@ -65,6 +66,37 @@ impl<'a> Cursor<'a> {
         }
         Some(chunk)
     }
+    /// Read the body of an unknown/`<!...>` node up to the terminating `>`,
+    /// honoring a bracketed internal subset (`<!DOCTYPE x [ ... ]>`) so a `>`
+    /// inside the `[...]` does not end the node early. Returns the body and
+    /// consumes the closing `>`. Returns `None` if unterminated.
+    fn take_unknown(&mut self) -> Option<&'a str> {
+        let start = self.pos;
+        let mut depth: i32 = 0;
+        while let Some(c) = self.peek() {
+            match c {
+                '[' => {
+                    depth += 1;
+                    self.bump();
+                }
+                ']' => {
+                    if depth > 0 {
+                        depth -= 1;
+                    }
+                    self.bump();
+                }
+                '>' if depth == 0 => {
+                    let chunk = &self.s[start..self.pos];
+                    self.bump();
+                    return Some(chunk);
+                }
+                _ => {
+                    self.bump();
+                }
+            }
+        }
+        None
+    }
 }
 
 impl XmlDocument {
@@ -80,13 +112,18 @@ impl XmlDocument {
         let mut cur = Cursor::new(body);
         let process_entities = self.process_entities;
 
-        parse_node_list(self, &mut cur, root, 0, process_entities, None)?;
-
-        if self.root_element().is_none() {
+        let mut result = parse_node_list(self, &mut cur, root, 0, process_entities, None);
+        if result.is_ok() && self.root_element().is_none() {
             let line = cur.line;
-            return Err(self.set_error(XmlError::ErrorEmptyDocument, line, "no root element"));
+            result = Err(self.set_error(XmlError::ErrorEmptyDocument, line, "no root element"));
         }
-        Ok(())
+        if result.is_err() {
+            // Leave the document empty on failure so a caller that ignores the
+            // Err and inspects root_element() can't walk a half-built tree.
+            // delete_children does not touch the error state set above.
+            self.delete_children(root);
+        }
+        result
     }
 }
 
@@ -106,13 +143,13 @@ fn parse_node_list(
         if !cur.starts_with("<") {
             let raw = cur.take_while(|c| c != '<');
             if !raw.is_empty() {
-                let mut text = if process_entities {
+                let mut text: Cow<str> = if process_entities {
                     decode_entities(raw)
                 } else {
-                    raw.to_string()
+                    Cow::Borrowed(raw)
                 };
                 if doc.whitespace_mode == crate::node::Whitespace::Collapse {
-                    text = crate::strutil::collapse_whitespace(&text);
+                    text = Cow::Owned(crate::strutil::collapse_whitespace(&text));
                 }
                 if (open_name.is_some() || !text.trim().is_empty())
                     && !(doc.whitespace_mode == crate::node::Whitespace::Collapse
@@ -171,7 +208,7 @@ fn parse_node_list(
         } else if cur.starts_with("<!") {
             cur.consume("<!");
             let line = cur.line;
-            let body_opt = cur.take_until(">");
+            let body_opt = cur.take_unknown();
             let body = body_opt.ok_or_else(|| {
                 doc.set_error(XmlError::ErrorParsingUnknown, line, "unterminated")
             })?;
@@ -243,12 +280,21 @@ fn parse_attributes(
                 "unterminated value",
             )
         })?;
+        // Reject duplicate attribute names (matches tinyxml2, which sets
+        // XML_ERROR_PARSING_ATTRIBUTE rather than silently last-wins).
+        if doc.attribute(el, name).is_some() {
+            return Err(doc.set_error(
+                XmlError::ErrorParsingAttribute,
+                line,
+                "duplicate attribute",
+            ));
+        }
         let value = if process_entities {
             decode_entities(raw)
         } else {
-            raw.to_string()
+            Cow::Borrowed(raw)
         };
-        doc.set_attribute(el, name, value.as_str());
+        doc.set_attribute(el, name, value.as_ref());
     }
 }
 
@@ -272,6 +318,33 @@ mod tests {
         assert_eq!(doc.attribute(a, "id"), Some("1"));
         let b = doc.first_child_element(a, Some("b")).unwrap();
         assert_eq!(doc.text(b), Some("hi"));
+    }
+
+    #[test]
+    fn doctype_with_internal_subset_is_not_truncated() {
+        let mut doc = XmlDocument::new();
+        // The '>' inside the [...] subset must not end the unknown node early.
+        doc.parse("<!DOCTYPE root [<!ELEMENT x ANY>]><a/>").unwrap();
+        let a = doc.root_element().unwrap();
+        assert_eq!(doc.name(a), Some("a"));
+    }
+
+    #[test]
+    fn duplicate_attribute_is_rejected() {
+        let mut doc = XmlDocument::new();
+        assert_eq!(
+            doc.parse(r#"<a x="1" x="2"/>"#).unwrap_err(),
+            crate::XmlError::ErrorParsingAttribute
+        );
+    }
+
+    #[test]
+    fn parse_error_leaves_empty_document() {
+        let mut doc = XmlDocument::new();
+        assert!(doc.parse("<a><b></a>").is_err());
+        // Tree is cleared on error; root_element must not expose a partial tree.
+        assert!(doc.error().is_some());
+        assert_eq!(doc.root_element(), None);
     }
 
     #[test]
