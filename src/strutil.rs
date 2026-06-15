@@ -74,7 +74,8 @@ pub fn encode_text(input: &str) -> String {
 
 /// Parse a bool the way tinyxml2 does: accepts true/false/1/0, case-insensitive.
 pub fn parse_bool(s: &str) -> Option<bool> {
-    match s.trim() {
+    let s = s.trim();
+    match s {
         _ if s.eq_ignore_ascii_case("true") => Some(true),
         _ if s.eq_ignore_ascii_case("false") => Some(false),
         "1" => Some(true),
@@ -122,6 +123,8 @@ mod tests {
         assert_eq!(parse_bool("1"), Some(true));
         assert_eq!(parse_bool("0"), Some(false));
         assert_eq!(parse_bool("True"), Some(true));
+        assert_eq!(parse_bool(" true "), Some(true));
+        assert_eq!(parse_bool(" 0 "), Some(false));
         assert_eq!(parse_bool("maybe"), None);
     }
 
