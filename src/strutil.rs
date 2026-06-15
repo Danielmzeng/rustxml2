@@ -89,6 +89,24 @@ pub fn is_whitespace(ch: char) -> bool {
     matches!(ch, ' ' | '\t' | '\r' | '\n')
 }
 
+/// Collapse runs of whitespace to a single space and trim ends (tinyxml2 COLLAPSE_WHITESPACE).
+pub fn collapse_whitespace(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut in_ws = false;
+    for ch in input.trim().chars() {
+        if is_whitespace(ch) {
+            if !in_ws {
+                out.push(' ');
+                in_ws = true;
+            }
+        } else {
+            out.push(ch);
+            in_ws = false;
+        }
+    }
+    out
+}
+
 /// tinyxml2 `IsNameStartChar`.
 pub fn is_name_start_char(ch: char) -> bool {
     ch as u32 >= 128 || ch.is_ascii_alphabetic() || ch == ':' || ch == '_'

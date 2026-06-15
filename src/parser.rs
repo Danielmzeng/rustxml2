@@ -106,8 +106,15 @@ fn parse_node_list(
         if !cur.starts_with("<") {
             let raw = cur.take_while(|c| c != '<');
             if !raw.is_empty() {
-                let text = if process_entities { decode_entities(raw) } else { raw.to_string() };
-                if open_name.is_some() || !text.trim().is_empty() {
+                let mut text =
+                    if process_entities { decode_entities(raw) } else { raw.to_string() };
+                if doc.whitespace_mode == crate::node::Whitespace::Collapse {
+                    text = crate::strutil::collapse_whitespace(&text);
+                }
+                if (open_name.is_some() || !text.trim().is_empty())
+                    && !(doc.whitespace_mode == crate::node::Whitespace::Collapse
+                        && text.is_empty())
+                {
                     let t = doc.new_text(&text);
                     doc.insert_end_child(parent, t);
                 }

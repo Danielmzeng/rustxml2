@@ -321,6 +321,33 @@ impl XmlDocument {
         ChildElements { doc: self, next: self.node(id).first_child, name }
     }
 
+    /// Load and parse an XML file (UTF-8).
+    pub fn load_file(&mut self, path: &std::path::Path) -> Result<()> {
+        let read_result = std::fs::read_to_string(path);
+        let content = match read_result {
+            Ok(s) => s,
+            Err(e) => {
+                let err = match e.kind() {
+                    std::io::ErrorKind::NotFound => {
+                        self.set_error(XmlError::FileNotFound, 0, "file not found")
+                    }
+                    std::io::ErrorKind::PermissionDenied => {
+                        self.set_error(XmlError::FileCouldNotBeOpened, 0, "permission denied")
+                    }
+                    _ => self.set_error(XmlError::FileReadError, 0, "read error"),
+                };
+                return Err(err);
+            }
+        };
+        self.parse(&content)
+    }
+
+    /// Serialize and write the document to a file.
+    pub fn save_file(&self, path: &std::path::Path, compact: bool) -> Result<()> {
+        std::fs::write(path, self.print_to_string(compact))
+            .map_err(|_| XmlError::FileCouldNotBeOpened)
+    }
+
     /// Serialize the whole document to a string. `compact` removes indentation.
     pub fn print_to_string(&self, compact: bool) -> String {
         let mut printer = crate::printer::XmlPrinter::new(compact);
@@ -467,5 +494,33 @@ mod tests {
         let names: Vec<String> =
             doc.child_elements(root, None).map(|id| doc.name(id).unwrap().to_string()).collect();
         assert_eq!(names, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn collapse_whitespace_mode() {
+        let mut doc = XmlDocument::new();
+        doc.set_whitespace_mode(crate::Whitespace::Collapse);
+        doc.parse("<a>   hello     world   </a>").unwrap();
+        let a = doc.root_element().unwrap();
+        assert_eq!(doc.text(a), Some("hello world"));
+    }
+
+    #[test]
+    fn load_and_save_file_roundtrip() {
+        let dir = std::env::temp_dir();
+        let path = dir.join("rustxml2_io_test.xml");
+        std::fs::write(&path, r#"<root a="1"><child/></root>"#).unwrap();
+
+        let mut doc = XmlDocument::new();
+        doc.load_file(&path).unwrap();
+        assert_eq!(doc.name(doc.root_element().unwrap()), Some("root"));
+
+        let out = dir.join("rustxml2_io_out.xml");
+        doc.save_file(&out, true).unwrap();
+        let written = std::fs::read_to_string(&out).unwrap();
+        assert_eq!(written, r#"<root a="1"><child/></root>"#);
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&out);
     }
 }
