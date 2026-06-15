@@ -321,6 +321,21 @@ impl XmlDocument {
         ChildElements { doc: self, next: self.node(id).first_child, name }
     }
 
+    /// Serialize the whole document to a string. `compact` removes indentation.
+    pub fn print_to_string(&self, compact: bool) -> String {
+        let mut printer = crate::printer::XmlPrinter::new(compact);
+        let mut child = self.node(self.root()).first_child;
+        while let Some(c) = child {
+            self.accept(c, &mut printer);
+            child = self.node(c).next_sibling;
+        }
+        let mut s = printer.into_string();
+        if !compact && !s.ends_with('\n') {
+            s.push('\n');
+        }
+        s
+    }
+
     /// Traverse the subtree rooted at `id`, dispatching to `visitor`.
     pub fn accept(&self, id: NodeId, visitor: &mut dyn crate::visitor::XmlVisitor) {
         use crate::node::NodeKind;
