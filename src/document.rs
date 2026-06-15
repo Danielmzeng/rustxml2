@@ -316,11 +316,35 @@ impl XmlDocument {
     pub fn query_bool_attribute(&self, id: NodeId, name: &str) -> Result<bool> {
         self.find_attribute(id, name)?.as_bool()
     }
+
+    pub fn child_elements<'a>(&'a self, id: NodeId, name: Option<&'a str>) -> ChildElements<'a> {
+        ChildElements { doc: self, next: self.node(id).first_child, name }
+    }
 }
 
 impl Default for XmlDocument {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Iterator over child elements of a node, optionally filtered by name.
+pub struct ChildElements<'a> {
+    doc: &'a XmlDocument,
+    next: Option<NodeId>,
+    name: Option<&'a str>,
+}
+
+impl<'a> Iterator for ChildElements<'a> {
+    type Item = NodeId;
+    fn next(&mut self) -> Option<NodeId> {
+        while let Some(cur) = self.next {
+            self.next = self.doc.node(cur).next_sibling;
+            if self.doc.matches_element(cur, self.name) {
+                return Some(cur);
+            }
+        }
+        None
     }
 }
 
@@ -375,5 +399,19 @@ mod tests {
         doc.insert_end_child(root, a);
         doc.delete_node(a);
         assert_eq!(doc.first_child_element(root, None), None);
+    }
+
+    #[test]
+    fn iterate_child_elements() {
+        let mut doc = XmlDocument::new();
+        let root = doc.new_element("root");
+        doc.insert_end_child(doc.root(), root);
+        for n in ["a", "b", "c"] {
+            let e = doc.new_element(n);
+            doc.insert_end_child(root, e);
+        }
+        let names: Vec<String> =
+            doc.child_elements(root, None).map(|id| doc.name(id).unwrap().to_string()).collect();
+        assert_eq!(names, vec!["a", "b", "c"]);
     }
 }
