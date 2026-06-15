@@ -11,6 +11,6 @@ pub mod printer;
 pub mod strutil;
 pub mod visitor;
 
-// pub use document::XmlDocument;
-// pub use error::{Result, XmlError};
-// pub use node::{NodeKind, Whitespace};
+pub use document::XmlDocument;
+pub use error::{Result, XmlError};
+pub use node::{NodeKind, Whitespace};
