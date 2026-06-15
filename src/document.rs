@@ -188,7 +188,7 @@ impl XmlDocument {
 
     pub(crate) fn matches_element(&self, id: NodeId, name: Option<&str>) -> bool {
         let n = self.node(id);
-        n.is_element() && name.map_or(true, |want| n.value == want)
+        n.is_element() && name.is_none_or(|want| n.value == want)
     }
 
     pub fn first_child_element(&self, id: NodeId, name: Option<&str>) -> Option<NodeId> {
