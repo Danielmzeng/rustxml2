@@ -40,8 +40,14 @@ fn sibling_iteration_counts_elements() {
 #[test]
 fn error_cases_report_expected_codes() {
     let mut doc = XmlDocument::new();
-    assert_eq!(doc.parse("<a></b>").unwrap_err(), rustxml2::XmlError::ErrorMismatchedElement);
+    assert_eq!(
+        doc.parse("<a></b>").unwrap_err(),
+        rustxml2::XmlError::ErrorMismatchedElement
+    );
 
     let mut doc2 = XmlDocument::new();
-    assert_eq!(doc2.parse("").unwrap_err(), rustxml2::XmlError::ErrorEmptyDocument);
+    assert_eq!(
+        doc2.parse("").unwrap_err(),
+        rustxml2::XmlError::ErrorEmptyDocument
+    );
 }

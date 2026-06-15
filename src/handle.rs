@@ -12,11 +12,17 @@ pub struct XmlHandle<'a> {
 
 impl<'a> XmlHandle<'a> {
     pub fn new(doc: &'a XmlDocument, id: NodeId) -> Self {
-        XmlHandle { doc, node: Some(id) }
+        XmlHandle {
+            doc,
+            node: Some(id),
+        }
     }
 
     fn wrap(self, node: Option<NodeId>) -> Self {
-        XmlHandle { doc: self.doc, node }
+        XmlHandle {
+            doc: self.doc,
+            node,
+        }
     }
 
     pub fn id(self) -> Option<NodeId> {
@@ -29,7 +35,9 @@ impl<'a> XmlHandle<'a> {
     }
 
     pub fn first_child_element(self, name: Option<&str>) -> Self {
-        let next = self.node.and_then(|id| self.doc.first_child_element(id, name));
+        let next = self
+            .node
+            .and_then(|id| self.doc.first_child_element(id, name));
         self.wrap(next)
     }
 
@@ -39,7 +47,9 @@ impl<'a> XmlHandle<'a> {
     }
 
     pub fn next_sibling_element(self, name: Option<&str>) -> Self {
-        let next = self.node.and_then(|id| self.doc.next_sibling_element(id, name));
+        let next = self
+            .node
+            .and_then(|id| self.doc.next_sibling_element(id, name));
         self.wrap(next)
     }
 

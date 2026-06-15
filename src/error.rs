@@ -69,7 +69,13 @@ mod tests {
     #[test]
     fn error_names_match_tinyxml2() {
         assert_eq!(XmlError::NoAttribute.name(), "XML_NO_ATTRIBUTE");
-        assert_eq!(XmlError::ElementDepthExceeded.name(), "XML_ELEMENT_DEPTH_EXCEEDED");
-        assert_eq!(XmlError::ErrorMismatchedElement.name(), "XML_ERROR_MISMATCHED_ELEMENT");
+        assert_eq!(
+            XmlError::ElementDepthExceeded.name(),
+            "XML_ELEMENT_DEPTH_EXCEEDED"
+        );
+        assert_eq!(
+            XmlError::ErrorMismatchedElement.name(),
+            "XML_ERROR_MISMATCHED_ELEMENT"
+        );
     }
 }

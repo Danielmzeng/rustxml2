@@ -16,8 +16,8 @@ pub enum Whitespace {
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClosingType {
-    Open,    // <foo>
-    Closed,  // <foo/>
+    Open,   // <foo>
+    Closed, // <foo/>
 }
 
 /// Element-specific payload.

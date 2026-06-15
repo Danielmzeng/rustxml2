@@ -106,8 +106,11 @@ fn parse_node_list(
         if !cur.starts_with("<") {
             let raw = cur.take_while(|c| c != '<');
             if !raw.is_empty() {
-                let mut text =
-                    if process_entities { decode_entities(raw) } else { raw.to_string() };
+                let mut text = if process_entities {
+                    decode_entities(raw)
+                } else {
+                    raw.to_string()
+                };
                 if doc.whitespace_mode == crate::node::Whitespace::Collapse {
                     text = crate::strutil::collapse_whitespace(&text);
                 }
@@ -140,8 +143,9 @@ fn parse_node_list(
             cur.consume("<!--");
             let line = cur.line;
             let body_opt = cur.take_until("-->");
-            let body = body_opt
-                .ok_or_else(|| doc.set_error(XmlError::ErrorParsingComment, line, "unterminated"))?;
+            let body = body_opt.ok_or_else(|| {
+                doc.set_error(XmlError::ErrorParsingComment, line, "unterminated")
+            })?;
             let c = doc.new_comment(body);
             doc.insert_end_child(parent, c);
         } else if cur.starts_with("<![CDATA[") {
@@ -159,16 +163,18 @@ fn parse_node_list(
             cur.consume("<?");
             let line = cur.line;
             let body_opt = cur.take_until("?>");
-            let body = body_opt
-                .ok_or_else(|| doc.set_error(XmlError::ErrorParsingDeclaration, line, "unterminated"))?;
+            let body = body_opt.ok_or_else(|| {
+                doc.set_error(XmlError::ErrorParsingDeclaration, line, "unterminated")
+            })?;
             let d = doc.new_declaration(body);
             doc.insert_end_child(parent, d);
         } else if cur.starts_with("<!") {
             cur.consume("<!");
             let line = cur.line;
             let body_opt = cur.take_until(">");
-            let body = body_opt
-                .ok_or_else(|| doc.set_error(XmlError::ErrorParsingUnknown, line, "unterminated"))?;
+            let body = body_opt.ok_or_else(|| {
+                doc.set_error(XmlError::ErrorParsingUnknown, line, "unterminated")
+            })?;
             let u = doc.new_unknown(body);
             doc.insert_end_child(parent, u);
         } else if cur.consume("<") {
@@ -219,14 +225,29 @@ fn parse_attributes(
         cur.skip_ws();
         let quote = match cur.bump() {
             Some(q @ '"') | Some(q @ '\'') => q,
-            _ => return Err(doc.set_error(XmlError::ErrorParsingAttribute, cur.line, "missing quote")),
+            _ => {
+                return Err(doc.set_error(
+                    XmlError::ErrorParsingAttribute,
+                    cur.line,
+                    "missing quote",
+                ))
+            }
         };
         let term = if quote == '"' { "\"" } else { "'" };
         let attr_line = cur.line;
         let raw_opt = cur.take_until(term);
-        let raw = raw_opt
-            .ok_or_else(|| doc.set_error(XmlError::ErrorParsingAttribute, attr_line, "unterminated value"))?;
-        let value = if process_entities { decode_entities(raw) } else { raw.to_string() };
+        let raw = raw_opt.ok_or_else(|| {
+            doc.set_error(
+                XmlError::ErrorParsingAttribute,
+                attr_line,
+                "unterminated value",
+            )
+        })?;
+        let value = if process_entities {
+            decode_entities(raw)
+        } else {
+            raw.to_string()
+        };
         doc.set_attribute(el, name, value.as_str());
     }
 }
@@ -265,7 +286,8 @@ mod tests {
     #[test]
     fn parse_declaration_and_comment() {
         let mut doc = XmlDocument::new();
-        doc.parse(r#"<?xml version="1.0"?><!-- hi --><root/>"#).unwrap();
+        doc.parse(r#"<?xml version="1.0"?><!-- hi --><root/>"#)
+            .unwrap();
         assert_eq!(doc.name(doc.root_element().unwrap()), Some("root"));
     }
 

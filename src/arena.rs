@@ -20,18 +20,30 @@ pub struct Arena<T> {
 
 impl<T> Arena<T> {
     pub fn new() -> Self {
-        Arena { slots: Vec::new(), free: Vec::new() }
+        Arena {
+            slots: Vec::new(),
+            free: Vec::new(),
+        }
     }
 
     pub fn insert(&mut self, value: T) -> NodeId {
         if let Some(index) = self.free.pop() {
             let slot = &mut self.slots[index as usize];
             slot.value = Some(value);
-            NodeId { index, generation: slot.generation }
+            NodeId {
+                index,
+                generation: slot.generation,
+            }
         } else {
             let index = self.slots.len() as u32;
-            self.slots.push(Slot { generation: 0, value: Some(value) });
-            NodeId { index, generation: 0 }
+            self.slots.push(Slot {
+                generation: 0,
+                value: Some(value),
+            });
+            NodeId {
+                index,
+                generation: 0,
+            }
         }
     }
 

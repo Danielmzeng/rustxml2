@@ -3,7 +3,8 @@ use rustxml2::{XmlDocument, XmlError};
 #[test]
 fn typed_attribute_queries() {
     let mut doc = XmlDocument::new();
-    doc.parse(r#"<e i="42" n="-7" f="3.5" b="true" big="10000000000"/>"#).unwrap();
+    doc.parse(r#"<e i="42" n="-7" f="3.5" b="true" big="10000000000"/>"#)
+        .unwrap();
     let e = doc.root_element().unwrap();
 
     assert_eq!(doc.query_int_attribute(e, "i"), Ok(42));
@@ -12,8 +13,14 @@ fn typed_attribute_queries() {
     assert_eq!(doc.query_bool_attribute(e, "b"), Ok(true));
     assert_eq!(doc.query_int64_attribute(e, "big"), Ok(10_000_000_000));
 
-    assert_eq!(doc.query_int_attribute(e, "missing"), Err(XmlError::NoAttribute));
-    assert_eq!(doc.query_int_attribute(e, "f"), Err(XmlError::WrongAttributeType));
+    assert_eq!(
+        doc.query_int_attribute(e, "missing"),
+        Err(XmlError::NoAttribute)
+    );
+    assert_eq!(
+        doc.query_int_attribute(e, "f"),
+        Err(XmlError::WrongAttributeType)
+    );
 }
 
 #[test]

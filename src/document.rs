@@ -81,17 +81,22 @@ impl XmlDocument {
         ))
     }
     pub fn new_text(&mut self, text: &str) -> NodeId {
-        self.nodes
-            .insert(NodeData::new(NodeKind::Text(TextData { cdata: false }), text.to_string()))
+        self.nodes.insert(NodeData::new(
+            NodeKind::Text(TextData { cdata: false }),
+            text.to_string(),
+        ))
     }
     pub fn new_comment(&mut self, text: &str) -> NodeId {
-        self.nodes.insert(NodeData::new(NodeKind::Comment, text.to_string()))
+        self.nodes
+            .insert(NodeData::new(NodeKind::Comment, text.to_string()))
     }
     pub fn new_declaration(&mut self, text: &str) -> NodeId {
-        self.nodes.insert(NodeData::new(NodeKind::Declaration, text.to_string()))
+        self.nodes
+            .insert(NodeData::new(NodeKind::Declaration, text.to_string()))
     }
     pub fn new_unknown(&mut self, text: &str) -> NodeId {
-        self.nodes.insert(NodeData::new(NodeKind::Unknown, text.to_string()))
+        self.nodes
+            .insert(NodeData::new(NodeKind::Unknown, text.to_string()))
     }
 
     // ---- linking ----
@@ -281,7 +286,10 @@ impl XmlDocument {
             if let Some(a) = data.attributes.iter_mut().find(|a| a.name == name) {
                 a.value = value;
             } else {
-                data.attributes.push(Attribute { name: name.to_string(), value });
+                data.attributes.push(Attribute {
+                    name: name.to_string(),
+                    value,
+                });
             }
         }
     }
@@ -318,7 +326,11 @@ impl XmlDocument {
     }
 
     pub fn child_elements<'a>(&'a self, id: NodeId, name: Option<&'a str>) -> ChildElements<'a> {
-        ChildElements { doc: self, next: self.node(id).first_child, name }
+        ChildElements {
+            doc: self,
+            next: self.node(id).first_child,
+            name,
+        }
     }
 
     /// Load and parse an XML file (UTF-8).
@@ -460,7 +472,10 @@ mod tests {
         assert_eq!(doc.attribute(e, "id"), Some("5"));
         assert_eq!(doc.query_int_attribute(e, "id"), Ok(5));
         assert_eq!(doc.query_bool_attribute(e, "ok"), Ok(true));
-        assert_eq!(doc.query_int_attribute(e, "missing"), Err(XmlError::NoAttribute));
+        assert_eq!(
+            doc.query_int_attribute(e, "missing"),
+            Err(XmlError::NoAttribute)
+        );
     }
 
     #[test]
@@ -491,8 +506,10 @@ mod tests {
             let e = doc.new_element(n);
             doc.insert_end_child(root, e);
         }
-        let names: Vec<String> =
-            doc.child_elements(root, None).map(|id| doc.name(id).unwrap().to_string()).collect();
+        let names: Vec<String> = doc
+            .child_elements(root, None)
+            .map(|id| doc.name(id).unwrap().to_string())
+            .collect();
         assert_eq!(names, vec!["a", "b", "c"]);
     }
 

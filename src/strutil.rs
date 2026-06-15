@@ -123,7 +123,10 @@ mod tests {
 
     #[test]
     fn decode_named_and_numeric_entities() {
-        assert_eq!(decode_entities("a &lt; b &amp; c &gt; &apos;&quot;"), "a < b & c > '\"");
+        assert_eq!(
+            decode_entities("a &lt; b &amp; c &gt; &apos;&quot;"),
+            "a < b & c > '\""
+        );
         assert_eq!(decode_entities("&#65;&#x42;"), "AB");
         assert_eq!(decode_entities("no entities"), "no entities");
         assert_eq!(decode_entities("&unknown;"), "&unknown;");
@@ -131,7 +134,10 @@ mod tests {
 
     #[test]
     fn encode_escapes_required_chars() {
-        assert_eq!(encode_text("a < b & c > \"x\" 'y'"), "a &lt; b &amp; c &gt; &quot;x&quot; 'y'");
+        assert_eq!(
+            encode_text("a < b & c > \"x\" 'y'"),
+            "a &lt; b &amp; c &gt; &quot;x&quot; 'y'"
+        );
     }
 
     #[test]

@@ -1,4 +1,13 @@
 //! rustxml2 — an idiomatic Rust port of the tinyxml2 XML DOM library.
+//!
+//! ```
+//! use rustxml2::XmlDocument;
+//! let mut doc = XmlDocument::new();
+//! doc.parse(r#"<note to="you">hello</note>"#).unwrap();
+//! let note = doc.root_element().unwrap();
+//! assert_eq!(doc.attribute(note, "to"), Some("you"));
+//! assert_eq!(doc.text(note), Some("hello"));
+//! ```
 
 pub mod arena;
 pub mod attribute;

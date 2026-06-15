@@ -13,7 +13,10 @@ pub struct Attribute {
 macro_rules! typed_accessor {
     ($method:ident, $ty:ty) => {
         pub fn $method(&self) -> Result<$ty> {
-            self.value.trim().parse::<$ty>().map_err(|_| XmlError::WrongAttributeType)
+            self.value
+                .trim()
+                .parse::<$ty>()
+                .map_err(|_| XmlError::WrongAttributeType)
         }
     };
 }
@@ -60,7 +63,11 @@ xml_value_display!(f64);
 
 impl XmlValue for bool {
     fn to_xml_string(&self) -> String {
-        if *self { "true".into() } else { "false".into() }
+        if *self {
+            "true".into()
+        } else {
+            "false".into()
+        }
     }
 }
 
@@ -82,15 +89,24 @@ mod tests {
 
     #[test]
     fn typed_accessors() {
-        let a = Attribute { name: "x".into(), value: "42".into() };
+        let a = Attribute {
+            name: "x".into(),
+            value: "42".into(),
+        };
         assert_eq!(a.as_i32(), Ok(42));
         assert_eq!(a.as_i64(), Ok(42));
         assert_eq!(a.as_f64(), Ok(42.0));
 
-        let b = Attribute { name: "b".into(), value: "true".into() };
+        let b = Attribute {
+            name: "b".into(),
+            value: "true".into(),
+        };
         assert_eq!(b.as_bool(), Ok(true));
 
-        let bad = Attribute { name: "n".into(), value: "abc".into() };
+        let bad = Attribute {
+            name: "n".into(),
+            value: "abc".into(),
+        };
         assert_eq!(bad.as_i32(), Err(XmlError::WrongAttributeType));
     }
 
